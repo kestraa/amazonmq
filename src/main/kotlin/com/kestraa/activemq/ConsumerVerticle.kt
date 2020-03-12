@@ -3,33 +3,26 @@ package com.kestraa.activemq
 import io.vertx.core.AbstractVerticle
 import io.vertx.core.Promise
 import io.vertx.core.logging.LoggerFactory
-import java.util.Objects.isNull
-import javax.jms.*
+import org.apache.qpid.proton.amqp.messaging.AmqpValue
 
 class ConsumerVerticle : AbstractVerticle() {
     private val logger = LoggerFactory.getLogger(ConsumerVerticle::class.java)
     
     override fun start(promise: Promise<Void>) {
-        val connection: javax.jms.Connection? = Connection.build("kestraa-consumer")
-        if (isNull(connection)) {
-            promise.fail("Could not connect to the server.")
-            return
-        }
-        
-        receive(connection!!)
-    }
-    
-    private fun receive(connection: javax.jms.Connection) {
-        connection.runCatching {
-            val session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE)
-            val destination = session.createQueue("health.dev.queue")
-            val consumer = session.createConsumer(destination)
-            
-            consumer.messageListener = MessageListener { msg ->
-                val textMsg = msg as TextMessage
-                logger.info("Message received - ${textMsg.text}")
+        Connection.create(vertx, "kestraa-producer")
+            .future()
+            .onSuccess { connection ->
+                connection.container = "kestraa-receiver"
+                connection.open()
+                
+                val receiver = connection.createReceiver("health.dev.queue").handler { _, message ->
+                    val data = message.body as AmqpValue
+                    val content = data.value as String
+                    logger.info("Message received: $content")
+                }
+                receiver.open()
             }
-        }.onFailure { logger.error(it.message) }
+            .onFailure { err -> logger.error(err.message) }
     }
     
 }

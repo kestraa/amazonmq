@@ -1,41 +1,40 @@
 package com.kestraa.activemq
 
-import org.apache.activemq.jms.pool.PooledConnectionFactory
-import java.util.*
-import javax.jms.Connection
-import javax.jms.ConnectionFactory
-import javax.naming.Context
-import javax.naming.InitialContext
+import io.vertx.core.Promise
+import io.vertx.core.Vertx
+import io.vertx.proton.ProtonClient
+import io.vertx.proton.ProtonClientOptions
+import io.vertx.proton.ProtonConnection
 
 object Connection {
-    private lateinit var connection: Connection
+    private val PORT = 5671
+    private val HOST = System.getenv("HOST")
+    private val USERNAME = System.getenv("USER")
+    private val PASSWORD = System.getenv("PASSWORD")
     
-    fun build(clientId: String): javax.jms.Connection? {
-        val host = System.getenv("HOST")
-        val username = System.getenv("USER")
-        val password = System.getenv("PASSWORD")
+    fun create(vertx: Vertx, clientId: String): Promise<ProtonConnection> {
+        val promise = Promise.promise<ProtonConnection>()
+        val client = ProtonClient.create(vertx)
         
-        val env = Hashtable<String, String>()
-        env[Context.INITIAL_CONTEXT_FACTORY] = "org.apache.qpid.jms.jndi.JmsInitialContextFactory"
-        env["connectionfactory.factoryLookup"] = "amqps://$host"
-        val context = InitialContext(env)
-    
-        val factory: ConnectionFactory = context.lookup("factoryLookup") as ConnectionFactory
-    
-        val pooledConnectionFactory = PooledConnectionFactory()
-        pooledConnectionFactory.connectionFactory = factory
-        pooledConnectionFactory.maxConnections = 10
-    
-        pooledConnectionFactory.runCatching {
-            connection = pooledConnectionFactory.createConnection(username, password)
-            connection.clientID = clientId
-            connection.start()
-            return connection
-        }.onFailure {
-            it.printStackTrace()
+        val options = ProtonClientOptions()
+        options.let {
+            it.heartbeat = 5000
+            it.connectTimeout = 3000
+            it.isSsl = true
         }
         
-        return null
+        client.connect(options, HOST, PORT, USERNAME, PASSWORD) { res ->
+            if (res.failed()) {
+                promise.fail(res.cause().message)
+                return@connect
+            }
+    
+            val connection = res.result()
+            connection.container = clientId
+            promise.complete(connection)
+        }
+        
+        return promise
     }
     
 }

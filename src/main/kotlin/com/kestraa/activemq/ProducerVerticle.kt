@@ -2,48 +2,50 @@ package com.kestraa.activemq
 
 import io.vertx.core.AbstractVerticle
 import io.vertx.core.Promise
-import io.vertx.core.logging.LoggerFactory
 import io.vertx.core.json.JsonObject
+import io.vertx.core.logging.LoggerFactory
+import io.vertx.proton.ProtonConnection
+import io.vertx.proton.ProtonHelper
+import io.vertx.proton.ProtonSender
 import java.time.LocalDateTime
-import java.util.*
-import javax.jms.DeliveryMode
-import javax.jms.Session
+import java.util.concurrent.atomic.AtomicInteger
 
 class ProducerVerticle : AbstractVerticle() {
     private val logger = LoggerFactory.getLogger(ProducerVerticle::class.java)
     
+    private val counter = AtomicInteger()
+    
     override fun start(promise: Promise<Void>) {
-        val connection: javax.jms.Connection? = Connection.build("kestraa-producer")
-        if (Objects.isNull(connection)) {
-            promise.fail("Could not connect to the server.")
-            return
-        }
-        
-        vertx.periodicStream(1000).handler {
-            val now = LocalDateTime.now().toString()
-            send(connection!!, JsonObject().put("message", "Hello from vertx! - $now"))
-        }
-    }
-
-    override fun stop(promise: Promise<Void>) {
-        promise.complete()
+        Connection.create(vertx, "kestraa-producer")
+            .future()
+            .onSuccess { connection ->
+                connection.container = "kestraa-producer"
+                connection.open()
+    
+                val sender = connection.createSender("health.dev.queue")
+                sender.open()
+                produceMessage(sender)
+            }
+            .onFailure { err -> logger.error(err.message) }
     }
     
-    private fun send(connection: javax.jms.Connection, json: JsonObject) {
-        connection.runCatching {
-            val session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE)
-            val destination = session.createQueue("health.dev.queue")
-            val producer = session.createProducer(destination)
-            producer.deliveryMode = DeliveryMode.PERSISTENT
-            producer.timeToLive = 15000
-            
-            val message = session.createTextMessage(json.encode())
-            producer.send(message)
-            
-            producer.close()
-            session.close()
-        }.onFailure { logger.error(it.message) }
-        .onSuccess { logger.info("Message sent!") }
+    private fun produceMessage(sender: ProtonSender) {
+        vertx.periodicStream(1000).handler {
+            val msgNum = counter.incrementAndGet()
+            val now = LocalDateTime.now().toString()
+            val data = JsonObject()
+                .put("counter", msgNum)
+                .put("message", "Hello from vertx Proton! - $now")
+        
+            val message = ProtonHelper.message(data.encode())
+            sender.send(message) {
+                logger.info("Message $msgNum sent.")
+            }
+        }
+    }
+    
+    override fun stop(promise: Promise<Void>) {
+        promise.complete()
     }
     
 }
